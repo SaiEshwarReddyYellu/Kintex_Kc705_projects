@@ -39,10 +39,12 @@ use IEEE.NUMERIC_STD.ALL;
 entity top_pl is
 --  Port ( );
      port (
-            axi_clk : in std_logic;
+            clk_80M : in std_logic;
+            clk_300M : in std_logic;
+            SENSOR_LOCK : in std_logic;
             rst_n : in std_logic;
             m00_tready : in std_logic;
-            m00_tdata : out std_logic_vector(95 downto 0);
+            m00_tdata : out std_logic_vector(127 downto 0);
             m00_tvalid : out std_logic
             );
 end top_pl;
@@ -115,8 +117,7 @@ ATTRIBUTE X_INTERFACE_INFO OF m00_tready :  SIGNAL IS "xilinx.com:interface:axis
         signal data_out_g : std_logic_vector(23 downto 0) := (others => '0');
         signal addr_cnt_g : integer range 0 to 49 := 0;
        
-       
-        
+            
          --memory for blue pixels
         signal wr_en_b : std_logic := '0';
         signal wr_en_a_b : std_logic := '0';
@@ -239,17 +240,17 @@ ATTRIBUTE X_INTERFACE_INFO OF m00_tready :  SIGNAL IS "xilinx.com:interface:axis
             signal flag_cnt : integer range 0 to 2600 := 0;
 
                  --PLL with 80 mhz and 300 mhz
-      component clk_wiz_0 
-        port (
-          -- Clock out ports
-          clk_out1 : out std_logic;
-          clk_out2 : out std_logic;
-          locked : out std_logic;
-         -- Status and control signals
-         resetn : in std_logic;
-         -- Clock in ports
-          clk_in1 : in std_logic);
-      end component clk_wiz_0;
+--      component clk_wiz_0 
+--        port (
+--       --  Clock out ports
+--          clk_out1 : out std_logic;
+--          clk_out2 : out std_logic;
+--          locked : out std_logic;
+--    --    Status and control signals
+--         resetn : in std_logic;
+--    --    Clock in ports
+--          clk_in1 : in std_logic);
+--      end component clk_wiz_0;
 
 
               --sensor component
@@ -265,6 +266,7 @@ ATTRIBUTE X_INTERFACE_INFO OF m00_tready :  SIGNAL IS "xilinx.com:interface:axis
                data_valid : out STD_LOGIC);
     
     end component;
+	
 
         --bram component_0
         component blk_mem_gen_0 is
@@ -292,18 +294,25 @@ ATTRIBUTE X_INTERFACE_INFO OF m00_tready :  SIGNAL IS "xilinx.com:interface:axis
     
 	signal t_valid_e1 : std_logic := '0';
 	
+	
+	signal m00_tdata_i :std_logic_vector(95 downto 0) := (others => '0'); 
 begin
-        m00_tvalid <= t_valid or t_valid_e or t_valid_e1;
-        m00_tdata <=  t_data_e when (t_valid_e = '1') else t_data; 
+        m00_tvalid <=  t_valid ;
+        m00_tdata_i <=  t_data;
+           
+		m00_tdata <= m00_tdata_i & x"00000000";
 		
+		CLK_80 <= clk_80m;
+		clk_300 <= clk_300m;
+		locked <= sensor_lock;
                     --clock instantiation
-           clk_ins : clk_wiz_0
-            port map (
-                    clk_in1 => axi_clk,
-                    resetn => rst_n,
-                    locked => locked,
-                    clk_out1 => clk_80,
-                    clk_out2 => clk_300);
+--          clk_ins : clk_wiz_0
+--           port map (
+--                   clk_in1 => axi_clk,
+--                   resetn => rst_n,
+--                   locked => locked,
+--                   clk_out1 => clk_80,
+--                   clk_out2 => clk_300);
                     
           
                   sensor_comp_ins: sensor_comp
@@ -868,7 +877,7 @@ begin
                                     tog_cnt <= 0;
                                     toggle_i <= not toggle_i;
                                     else
-                                        read_flag <= '0';
+                        --                read_flag <= '0';
                                         tog_cnt <= tog_cnt + 1;
                                 end if;
                         end if;  
@@ -904,157 +913,87 @@ begin
 
             
        read_block: block
+       type state_type is(idle,start, read_en,read_addr, read_data,set_valid, transmit);
+       signal state, next_state: state_type := idle;
        begin
-            process(clk_300)
-            begin
-                if rising_edge(clk_300) then
-                    if ((read_flag = '1') and (set_cnt = 400)) then
-                                read_cnt_pp <= 0;
-                            if (ready_reg = '1') and (read_cnt < 1536) then
+      seq_p: process(clk_300)
+           begin
+               if rising_edge(clk_300) then   
+                    state <= next_state;
+                    if rst_n = '0' then
+                        state <= idle;
+                        elsif (set_cnt = 400) then
+                            if next_state = set_valid then
+                                    t_data <= data_out_c_normal (23 downto 12) & data_out_b_normal (23 downto 12) & data_out_g_normal (23 downto 12) & data_out_normal (23 downto 12) &
+                                               data_out_c_normal (11 downto 0) & data_out_b_normal (11 downto 0) & data_out_g_normal (11 downto 0) & data_out_normal (11 downto 0);
+											   
+                            elsif next_state = transmit then                   
                                     read_cnt <= read_cnt + 1;
-									
-                                    rd_en_normal <= '1';
-                                    rd_en_g_normal <= '1'; 
-                                    rd_en_b_normal <= '1';
-                                    rd_en_c_normal <= '1';
-
-					--				t_valid <= '1';
-										if m00_tready = '0' then
-											read_cnt <= read_cnt;
-											t_data_e <= t_data;
-											t_valid_e <= t_valid;
-											
-											rd_en_normal <= '0';
-											rd_en_g_normal <= '0'; 
-											rd_en_b_normal <= '0';
-											rd_en_c_normal <= '0';
-											else
-											t_valid <= '1';
-										end if; 
-									
-                                    addrb_normal <=  std_logic_vector(to_unsigned((read_cnt),addrb_normal'length));
-                                    addrb_g_normal <=  std_logic_vector(to_unsigned((read_cnt),addrb_g_normal'length));
-                                    addrb_b_normal <=  std_logic_vector(to_unsigned((read_cnt),addrb_b_normal'length));
-                                    addrb_c_normal <=  std_logic_vector(to_unsigned((read_cnt),addrb_c_normal'length));
-	
-                                  elsif (ready_reg = '1') and (read_cnt = 1536) then
-                                        read_cnt <= read_cnt + 1;
-                                        -- data_out_normal <= data_out_normal;
-										-- data_out_g_normal <= data_out_g_normal;
-										-- data_out_b_normal <= data_out_b_normal;
-										-- data_out_c_normal <= data_out_c_normal;
-                                        rd_en_normal <= '1';
-                                        rd_en_g_normal <= '1'; 
-                                        rd_en_b_normal <= '1';
-                                        rd_en_c_normal <= '1';
-
-                                  else
-										t_valid <= '0';
-                                        rd_en_normal <= '0';
-                                        rd_en_g_normal <= '0'; 
-                                        rd_en_b_normal <= '0';
-                                        rd_en_c_normal <= '0';              
-                            end if; 
-							
-					elsif (set_cnt = 400) and (read_flag = '0') then
-									read_cnt <= 0;
-                            if (ready_reg = '1') and (read_cnt_pp < 1536) then
-                                    read_cnt_pp <= read_cnt_pp + 1;
-									
-                                    rd_en_pp <= '1';
-                                    rd_en_g_pp <= '1'; 
-                                    rd_en_b_pp <= '1';
-                                    rd_en_c_pp <= '1';
-
-						--		 t_valid <= '1';
-									if m00_tready = '0' then
-										read_cnt_pp <= read_cnt_pp;
-										t_data_e <= t_data;
-										t_valid_e <= t_valid;
-										
-										rd_en_pp <= '0';
-                                        rd_en_g_pp <= '0'; 
-                                        rd_en_b_pp <= '0';
-                                        rd_en_c_pp <= '0';
-										else
-											t_valid <= '1';
-									end if; 
-		
-		
-                                    addrb_pp <=  std_logic_vector(to_unsigned((read_cnt_pp),addrb_pp'length));
-                                    addrb_g_pp <=  std_logic_vector(to_unsigned((read_cnt_pp),addrb_g_pp'length));
-                                    addrb_b_pp <=  std_logic_vector(to_unsigned((read_cnt_pp),addrb_b_pp'length));
-                                    addrb_c_pp <=  std_logic_vector(to_unsigned((read_cnt_pp),addrb_c_pp'length));
-                                    
-                                    		
-                                    elsif (ready_reg = '1') and (read_cnt_pp = 1536) then
-                                        read_cnt_pp <= read_cnt_pp + 1;
-										-- data_out_pp <= data_out_pp;
-										-- data_out_g_pp <= data_out_g_pp;
-										-- data_out_b_pp <= data_out_b_pp;
-										-- data_out_c_pp <= data_out_c_pp;
-										
-                                        rd_en_pp <= '1';
-                                        rd_en_g_pp <= '1'; 
-                                        rd_en_b_pp <= '1';
-                                        rd_en_c_pp <= '1';
-
-										
-                                    else
-										t_valid <= '0';
-                                        rd_en_pp <= '0';
-                                        rd_en_g_pp <= '0'; 
-                                        rd_en_b_pp <= '0';
-                                        rd_en_c_pp <= '0';
-                             end if;        
+                                
+                            end if;
                     end if;
-					
-					
-					if ((read_flag = '1') and (set_cnt = 400)) then
-						
-							if ((rd_en_normal = '1') or (rd_en_g_normal = '1') or (rd_en_b_normal = '1') or(rd_en_c_normal = '1')) then
-
-								t_data <= data_out_c_normal (23 downto 12) & data_out_b_normal (23 downto 12) & data_out_g_normal (23 downto 12) & data_out_normal (23 downto 12) &
-										   data_out_c_normal (11 downto 0) & data_out_b_normal (11 downto 0) & data_out_g_normal (11 downto 0) & data_out_normal (11 downto 0);
-								
-							else
-								t_data <= t_data;
-								t_valid <= '0';
-							end if;
-							
-							
-							
-					
-						elsif ((set_cnt = 400) and (read_flag = '0')) then
-							if ((rd_en_pp = '1') or (rd_en_g_pp = '1') or (rd_en_b_pp = '1') or(rd_en_c_pp = '1'))  then
-								
-								t_data <= data_out_c_pp (23 downto 12) & data_out_b_pp (23 downto 12) & data_out_g_pp (23 downto 12) & data_out_pp (23 downto 12) &
-										   data_out_c_pp (11 downto 0) & data_out_b_pp (11 downto 0) & data_out_g_pp (11 downto 0) & data_out_pp (11 downto 0);
-								
-							else
-								t_data <= t_data;
-								t_valid <= '0';
-							end if;
-						
-					end if;
-					
-					if m00_tready = '1' then
-						t_valid_e <= '0';
-					end if;
-					
-				end if;
-				
-            end process;
-        
-		t_valid_e1 <=   (rd_en_normal xor t_valid) when ((read_flag = '1') and (set_cnt = 400)) else 
-                            (rd_en_pp xor t_valid) when ((read_flag = '0') and (set_cnt = 400));
-		
-		--	t_valid_e1 <= (rd_en_normal xor t_valid);
-            ready_reg <= not t_valid_e;
+              end if;
+       end process seq_p;
+       
+       comb_p: process(state,next_state,set_cnt,m00_tready,t_data)
+       begin
+            next_state <= state;
+       --     t_data <=  (others => '0');
             
+            case state is 
+                when idle =>
+                    if set_cnt = 400 then 
+                        next_state <= start;
+                        else
+                        next_state <= idle;
+                    end if;  
+                         
+                when start => 
+                    next_state <= read_en;
+                    t_valid <= '0';
+                    
+                when read_en =>               
+                      rd_en_normal <= '1';
+                      rd_en_g_normal <= '1'; 
+                      rd_en_b_normal <= '1';
+                      rd_en_c_normal <= '1';  
+                      
+                      t_valid <= '0';
+                      next_state <= read_addr; 
+                                           
+                when read_addr =>
+                    addrb_normal <=  std_logic_vector(to_unsigned((read_cnt),addrb_normal'length));
+                    addrb_g_normal <=  std_logic_vector(to_unsigned((read_cnt),addrb_g_normal'length));
+                    addrb_b_normal <=  std_logic_vector(to_unsigned((read_cnt),addrb_b_normal'length));
+                    addrb_c_normal <=  std_logic_vector(to_unsigned((read_cnt),addrb_c_normal'length));
+                    
+                    t_valid <= '0';
+                    next_state <= read_data;
+                    
+                when read_data =>
+                    rd_en_normal <= '0';
+                    rd_en_g_normal <= '0'; 
+                    rd_en_b_normal <= '0';
+                    rd_en_c_normal <= '0';
+                
+                    next_state <= set_valid;
+
+                when set_valid =>         
+                    t_valid <= '1';
+                    if m00_tready = '1' then
+                        next_state <= transmit;
+                        else
+                        next_state <= set_valid;
+                    end if;
+                when transmit =>
+                   t_valid <= '0';
+                   next_state <= read_en;
+                when others => 
+                
+            end case;
+       end process comb_p;
+         
        end block read_block;
             
     end Behavioral;
-
-
 
